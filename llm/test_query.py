@@ -35,3 +35,13 @@ print("AI INSIGHT")
 print("="*60)
 
 print(response["insight"])
+
+
+
+print("\n")
+print("=" * 60)
+print("FOLLOW-UP QUESTIONS")
+print("=" * 60)
+
+for q in response["followups"]:
+    print("•", q)

@@ -1,6 +1,7 @@
 import streamlit as st
 from llm.query_engine import QueryEngine
 from utils.charts import ChartGenerator
+from utils.kpi import KPIGenerator
 
 # -----------------------------------------------------
 # Page Configuration
@@ -19,6 +20,12 @@ st.set_page_config(
 if "history" not in st.session_state:
     st.session_state.history = []
 
+if "question" not in st.session_state:
+    st.session_state.question = ""
+
+if "pending_question" not in st.session_state:
+    st.session_state.pending_question = None
+
 engine = QueryEngine()
 
 # -----------------------------------------------------
@@ -26,7 +33,13 @@ engine = QueryEngine()
 # -----------------------------------------------------
 
 st.title("📊 InsightSQL AI")
-st.caption("AI-Powered Business Intelligence using PostgreSQL + Gemma 3")
+
+st.markdown(
+    "<span style='color:#64748B;font-size:18px;'>"
+    "AI-Powered Business Intelligence with PostgreSQL, RAG & Gemma 3"
+    "</span>",
+    unsafe_allow_html=True,
+)
 
 st.divider()
 
@@ -36,40 +49,71 @@ st.divider()
 
 with st.sidebar:
 
-    st.header("Example Questions")
+    st.title("📊 InsightSQL AI")
+    st.caption("Business Intelligence Assistant")
+
+    st.divider()
+
+    st.subheader("⚡ Suggested Questions")
 
     examples = [
         "Show the top 5 products by revenue.",
         "Which category generates the highest revenue?",
         "Show monthly revenue trend.",
         "Which cities have the most customers?",
-        "Show payment method distribution."
+        "Show payment method distribution.",
+        "List the top 10 customers by revenue from Berlin."
     ]
 
-    for q in examples:
-        if st.button(q, use_container_width=True):
-            st.session_state.selected_question = q
+    for i, q in enumerate(examples):
+        if st.button(q, key=f"example_{i}", use_container_width=True):
+            st.session_state.pending_question = q
+            st.rerun()
+
+    st.divider()
+
+    st.subheader("🕘 Recent Questions")
+
+    if not st.session_state.history:
+        st.caption("No history yet.")
+
+    else:
+        for i, item in enumerate(st.session_state.history[:5]):
+            if st.button(
+                item["question"],
+                key=f"history_{i}",
+                use_container_width=True,
+            ):
+                st.session_state.pending_question = item["question"]
+                st.rerun()
 
     st.divider()
 
     if st.button("🗑 Clear History", use_container_width=True):
         st.session_state.history = []
+        st.session_state.question = ""
+        st.session_state.pending_question = None
+        st.rerun()
 
 # -----------------------------------------------------
 # Input
 # -----------------------------------------------------
 
-default = st.session_state.get("selected_question", "")
+# Apply pending question BEFORE widget creation
+if st.session_state.pending_question:
+    st.session_state.question = st.session_state.pending_question
+    st.session_state.pending_question = None
 
 question = st.text_input(
-    "Ask a business question",
-    value=default,
-    placeholder="e.g. Show the top 5 products by revenue"
+    "💬 Ask your database anything",
+    key="question",
+    placeholder="Example: Which category generates the highest revenue?"
 )
 
-col1, col2 = st.columns([1,5])
+col1, col2 = st.columns([1, 6])
 
-run = col1.button("Run", type="primary", use_container_width=True)
+with col1:
+    run = st.button("🚀 Analyze", type="primary")
 
 # -----------------------------------------------------
 # Execute Query
@@ -95,57 +139,74 @@ if run and question:
 if st.session_state.history:
 
     latest = st.session_state.history[0]
-
     df = latest["data"]
 
     # ---------------- KPI ----------------
 
-    st.subheader("Key Metrics")
+    st.subheader("📈 Key Metrics")
 
-    c1, c2, c3 = st.columns(3)
+    kpis = KPIGenerator.generate(df)
 
-    with c1:
-        st.metric("Rows Returned", len(df))
+    kpi_cols = st.columns(3)
 
-    with c2:
-        if len(df.columns) >= 2:
-            if df.iloc[:,1].dtype != object:
-                st.metric(
-                    "Total Value",
-                    f"{df.iloc[:,1].sum():,.0f}"
-                )
-
-    with c3:
-        if len(df.columns) >= 2:
-            st.metric(
-                "Top Result",
-                str(df.iloc[0,0])
-            )
+    for col, metric in zip(kpi_cols, kpis):
+        title, value = metric
+        with col:
+            st.metric(title, value)
 
     st.divider()
 
-    # ---------------- Insight ----------------
+    # ---------------- AI Insight ----------------
 
-    st.subheader("🧠 AI Insight")
-
+    st.subheader("🧠 AI Business Insight")
     st.info(latest["insight"])
+
+    # ---------------- Follow-up Questions ----------------
+
+    followups = latest.get("followups", [])
+
+    if followups:
+
+        st.markdown("---")
+        st.subheader("💡 Suggested Next Questions")
+
+        cols = st.columns(min(3, len(followups)))
+
+        for i, suggestion in enumerate(followups[:3]):
+            with cols[i]:
+                if st.button(
+                    suggestion,
+                    key=f"followup_{i}",
+                    use_container_width=True,
+                ):
+                    st.session_state.pending_question = suggestion
+                    st.rerun()
+
+    st.divider()
 
     # ---------------- Chart ----------------
 
     chart = ChartGenerator.create_chart(df)
 
-    if chart:
+    if chart is not None:
         st.plotly_chart(chart, use_container_width=True)
 
-    # ---------------- Table ----------------
+    # ---------------- Result Table ----------------
 
     st.subheader("📋 Result Table")
 
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True
-    )
+    with st.container(border=True):
+
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            height=min(420, 45 * (len(df) + 1)),
+        )
+
+        st.caption(
+            f"Showing {len(df)} rows × {len(df.columns)} columns"
+        )
 
     # ---------------- Download ----------------
 
@@ -155,17 +216,16 @@ if st.session_state.history:
         "📥 Download CSV",
         csv,
         file_name="insights.csv",
-        mime="text/csv"
+        mime="text/csv",
     )
 
     # ---------------- SQL ----------------
 
-    with st.expander("🧾 Generated SQL"):
-
+    with st.expander("🧾 View Generated SQL"):
         st.code(latest["sql"], language="sql")
 
 # -----------------------------------------------------
-# History
+# Previous History
 # -----------------------------------------------------
 
 if len(st.session_state.history) > 1:
@@ -183,7 +243,7 @@ if len(st.session_state.history) > 1:
             st.dataframe(
                 item["data"],
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
             )
 
             st.code(item["sql"], language="sql")
